@@ -1,29 +1,18 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
-#![allow(unused_imports)]
 
 use alloy::{
     eips::BlockId,
-    providers::{Provider, ProviderBuilder, WsConnect}, transports::http::reqwest::Url,
+    providers::{Provider, ProviderBuilder },
 };
-use arrow::compute::filter;
 use dotenv::dotenv;
-use log::info;
 use std::path::Path;
 use anyhow::{anyhow, Result};
-use std::str::FromStr;
-use std::sync::Arc;
 
 use block_extractor_rs::{
-    interfaces::*,
     tokens::*,
     pools::*,
-    prices::*,
 };
-
-use std::fs::File;
-use parquet::file::reader::{FileReader, SerializedFileReader};
-
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -36,13 +25,13 @@ async fn main() -> Result<()> {
 //    let provider = ProviderBuilder::new().on_ws(ws).await?;
 
     let https_url = match std::env::var("HTTPS_URL") {
-        Ok(url) => url,
+        Ok(url) => url.parse()?,
         Err(_) => return Err(anyhow!("HTTPS_URL environment variable not set")),
     };
 
-    let provider = ProviderBuilder::new().on_builtin(
-        https_url.as_str()
-    ).await?;
+    let provider = ProviderBuilder::new().connect_http(
+        https_url
+    );
 
     let data_dir = Path::new("./data");
     if !data_dir.exists() {
@@ -54,7 +43,7 @@ async fn main() -> Result<()> {
     let chunks = 50000;
     let (pools, pool_id) = load_pools(
         provider.clone(),
-        Path::new("./data/pools.csv"),
+        Path::new("./data/pools.toml"),
         from_block_number,
         chunks,
     ).await.unwrap();
@@ -62,7 +51,7 @@ async fn main() -> Result<()> {
     let parallel_tokens = 1;
     let tokens = load_tokens(
         provider.clone(),
-        Path::new("./data/tokens.csv"),
+        Path::new("./data/tokens.toml"),
         &pools,
         parallel_tokens,
         pool_id,

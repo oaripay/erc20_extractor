@@ -1,19 +1,24 @@
 use alloy::{
-    eips::BlockId,
     primitives::{Address, U256},
-    providers::RootProvider,
-    pubsub::PubSubFrontend, transports::BoxTransport,
+    rpc::types::BlockId,
+    providers::Provider,
 };
 use arrow::{
-    array::ArrayRef, datatypes::{DataType, Field, Schema}, record_batch::RecordBatch
+    array::ArrayRef,
+    record_batch::RecordBatch
 };
 use parquet::{
-    arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter}, basic::Compression, file::properties::{EnabledStatistics, WriterProperties}
+    arrow::ArrowWriter,
+    basic::Compression,
+    file::properties::{
+        EnabledStatistics,
+        WriterProperties
+    }
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use std::{
     collections::BTreeMap,
-    fs::{OpenOptions, File},
+    fs::OpenOptions,
     path::Path,
     sync::Arc
 };
@@ -32,7 +37,7 @@ pub struct Price {
 
 
 pub async fn load_prices(
-    provider: RootProvider<BoxTransport>,
+    provider: impl Provider + Clone,
     pools: &BTreeMap<Address, Pool>,
     from_block: u64,
     to_block: u64,
@@ -188,7 +193,7 @@ fn create_record_batch(
 }
 
 async fn get_v2_price(
-    provider: RootProvider<BoxTransport>,
+    provider: impl Provider + Clone,
     block_number: u64,
     pool: &Pool,
 ) -> Result<(U256, U256)> {
@@ -203,7 +208,7 @@ async fn get_v2_price(
         .block(block)
         .call()
         .await {
-            Ok(r) => r.balance,
+            Ok(r) => r,
             Err(e) => { return Err(anyhow!("Error getting balance_token0 {:?}", e)); }
     };
 
@@ -212,7 +217,7 @@ async fn get_v2_price(
         .block(block)
         .call()
         .await {
-            Ok(r) => r.balance,
+            Ok(r) => r,
             Err(e) => { return Err(anyhow!("Error getting balance_token1 {:?}", e)); }
     };
 
@@ -220,7 +225,7 @@ async fn get_v2_price(
 }
 
 async fn get_v3_price(
-    provider: RootProvider<BoxTransport>,
+    provider: impl Provider + Clone,
     block_number: u64,
     pool: &Pool,
 ) -> Result<(U256, U256, U256)> {
@@ -237,7 +242,7 @@ async fn get_v3_price(
         .block(block)
         .call()
         .await {
-            Ok(r) => r.balance,
+            Ok(r) => r,
             Err(e) => { return Err(anyhow!("Error getting balance_token0 {:?}", e)); }
     };
     let balance_token1 = match token1_ierc20
@@ -245,7 +250,7 @@ async fn get_v3_price(
         .block(block)
         .call()
         .await {
-            Ok(r) => r.balance,
+            Ok(r) => r,
             Err(e) => { return Err(anyhow!("Error getting balance_token1 {:?}", e)); }
     };
 

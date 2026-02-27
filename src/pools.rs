@@ -1,26 +1,17 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-#![allow(unused_mut)]
-
 use alloy::{
     primitives::{address, Address, FixedBytes},
-    providers::{Provider, RootProvider},
-    rpc::types::{BlockId, BlockTransactionsKind, Filter},
+    rpc::types::{BlockId, Filter},
     sol_types::SolEvent,
-    transports::{http::{Client, Http}, BoxTransport}
+    providers::Provider,
 };
 use std::{
     collections::{BTreeMap, HashMap},
     fs::OpenOptions,
     path::Path,
-    str::FromStr,
-    sync::Arc,
     io::Write
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use anyhow::{Result, anyhow};
-use csv::StringRecord;
 use log::info;
 use serde::{Serialize, Deserialize};
 
@@ -58,7 +49,7 @@ impl Pool {
 }
 
 pub async fn load_pools(
-    provider: RootProvider<BoxTransport>,
+    provider: impl Provider + Clone,
     path: &Path,
     from_block: u64,
     chunk: u64,
@@ -66,7 +57,7 @@ pub async fn load_pools(
 
     info!("Loading Pools...");
 
-    let (mut pools, mut blocks) = match load_pools_from_file(path) {
+    let (mut pools, blocks) = match load_pools_from_file(path) {
         Ok(p) => p,
         Err(e) => return Err(e),
     };
@@ -80,7 +71,7 @@ pub async fn load_pools(
         true => {
             match blocks.iter().max() {
                 Some(b) => *b,
-                None => { return Err(anyhow!("load_pools could not find last processed block")); }
+                _ => { return Err(anyhow!("load_pools could not find last processed block")); }
             }
         }
         false => from_block
@@ -165,14 +156,14 @@ pub async fn load_pools(
 
 
 async fn get_pool_data(
-    provider: RootProvider<BoxTransport>,
+    provider: impl Provider,
     from_block: u64,
     to_block: u64,
     sig_hash: Vec<FixedBytes<32>>,
     address: Vec<Address>,
 ) -> Result<Vec<Pool>> {
     let mut pools = Vec::new();
-    let mut timestamp_map: HashMap<u64, u64> = HashMap::new();
+    let timestamp_map: HashMap<u64, u64> = HashMap::new();
 
     let filter = Filter::new()
         .from_block(from_block)
@@ -192,7 +183,7 @@ async fn get_pool_data(
         let (version, address, token0, token1, fee, tickspacing) = match log.topic0().unwrap() {
             &PairCreated::SIGNATURE_HASH => {
                 let event = match PairCreated::decode_log_data(
-                    log.data(), true
+                    log.data()
                 ) {
                     Ok(r) => r,
                     Err(e) => {
@@ -206,7 +197,7 @@ async fn get_pool_data(
             },
             &PoolCreated::SIGNATURE_HASH => {
                 let event = match PoolCreated::decode_log_data(
-                    log.data(), true
+                    log.data()
                 ) {
                     Ok(r) => r,
                     Err(e) => {
@@ -224,7 +215,7 @@ async fn get_pool_data(
 
         let block_number = match log.block_number {
             Some(r) => r,
-            None => {
+            _ => {
                 info!("log does not contain block_number");
                 0u64
             }
@@ -232,13 +223,12 @@ async fn get_pool_data(
 
         let timestamp = if !timestamp_map.contains_key(&block_number) {
             let block = match provider.get_block(
-                BlockId::from(block_number),
-                BlockTransactionsKind::default()
+                BlockId::from(block_number)
             ).await {
                 Ok(r) => {
                     match r {
                         Some(v) => v,
-                        None => {
+                        _ => {
                             info!("No block returned");
                             continue;
                         }

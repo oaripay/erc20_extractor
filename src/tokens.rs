@@ -1,62 +1,36 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-#![allow(unused_mut)]
-
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
+    io::Write,
     path::Path,
-    str::FromStr
 };
 use alloy::{
     primitives::Address,
-    providers::RootProvider,
-    transports::{http::{Client, Http}, BoxTransport},
+    providers::Provider,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use anyhow::{anyhow, Result};
-use csv::StringRecord;
 use log::info;
+use serde::{Serialize, Deserialize};
 
 use crate::{interfaces::IERC20, pools::Pool};
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Token {
-    pub id: i64,
     pub address: Address,
     pub name: String,
     pub symbol: String,
     pub decimals: u8
 }
 
-impl From<StringRecord> for Token {
-    fn from(record: StringRecord) -> Self {
-        Self {
-            id: record.get(0).unwrap().parse().unwrap(),
-            address: Address::from_str(record.get(1).unwrap()).unwrap(),
-            name: String::from(record.get(2).unwrap()),
-            symbol: String::from(record.get(3).unwrap()),
-            decimals: record.get(4).unwrap().parse().unwrap(),
-        }
-    }
-}
-
-impl Token {
-    pub fn cache_row(&self) -> (i64, String, String, String, u8) {
-        (
-            self.id,
-            format!("{:?}", self.address),
-            self.name.clone(),
-            self.symbol.clone(),
-            self.decimals,
-        )
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokensToml {
+    token: Vec<Token>,
 }
 
 pub async fn load_tokens(
-    provider: RootProvider<BoxTransport>,
+    provider: impl Provider + 'static + Clone,
     path: &Path,
     pools: &BTreeMap<Address, Pool>,
     parallel: u64,
@@ -65,35 +39,8 @@ pub async fn load_tokens(
 
     info!("Loading tokens...");
 
-    let mut tokens = BTreeMap::new();
+    let mut tokens = load_tokens_from_file(path)?;
 
-    let file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .create(true)
-        .open(path)
-        .unwrap();
-
-    let mut writer = csv::Writer::from_writer(file);
-
-    let mut token_id = 0;
-    if path.exists() {
-        let mut reader = csv::Reader::from_path(path)?;
-        for row in reader.records() {
-            let row = row.unwrap();
-            let token = Token::from(row);
-            tokens.insert(token.address, token);
-            token_id += 1;
-        }
-    } else {
-        writer.write_record(&[
-            "id",
-            "address",
-            "name",
-            "symbol",
-            "decimals",
-        ])?;
-    }
 
     let pb = ProgressBar::new(pools.len() as u64);
     pb.set_style(
@@ -104,7 +51,6 @@ pub async fn load_tokens(
         .progress_chars("##-"),
     );
 
-    let new_token_id = token_id;
 
     let mut count = 0;
     let mut requests = Vec::new();
@@ -137,14 +83,12 @@ pub async fn load_tokens(
                                 tokens.insert(
                                     t.address,
                                     Token {
-                                        id: token_id,
                                         address: t.address,
                                         name: t.name,
                                         symbol: t.symbol,
                                         decimals: t.decimals
                                     }
                                 );
-                                token_id += 1
                             }
                             Err(e) => { info!("Something wrong 0 {:?}", e) }
                         }
@@ -158,37 +102,32 @@ pub async fn load_tokens(
         }
     }
 
-    for token in tokens.values().collect::<Vec<&Token>>().iter() {
-        if token.id >= new_token_id {
-            writer.serialize(token.cache_row())?;
-        }
-    }
-    writer.flush()?;
+    write_tokens_to_toml(&tokens, path)?;
 
     Ok(tokens)
 }
 
 async fn get_token_data(
-    provider: RootProvider<BoxTransport>,
+    provider: impl Provider,
     token: Address,
 ) -> Result<Token> {
 
     let interface = IERC20::new(token, provider);
 
     let decimals = match interface.decimals().call().await {
-        Ok(r) => r.decimals,
+        Ok(r) => r,
         Err(e) => { return Err(anyhow!("Decimals of token failed {:?}", e )) }
     };
 
     let name = match interface.name().call().await {
-        Ok(r) => r.name,
+        Ok(r) => r,
         Err(e) => {
             info!("Name of token {:?} failed {:?}", token, e);
             String::from("PlaceHolderName")
         }
     };
     let symbol = match interface.symbol().call().await{
-        Ok(r) => r.symbol,
+        Ok(r) => r,
         Err(e) => {
             info!("Symbol of token failed {:?}", e );
             String::from("PlaceHolderSymbol")
@@ -196,7 +135,6 @@ async fn get_token_data(
     };
 
     Ok(Token {
-        id: -1,
         address: token,
         name,
         symbol,
@@ -210,15 +148,32 @@ pub fn load_tokens_from_file(
     let mut tokens = BTreeMap::new();
 
     if path.exists() {
-        let mut reader = csv::Reader::from_path(path)?;
-        for row in reader.records() {
-            let row = row.unwrap();
-            let token = Token::from(row);
+        let reader = std::fs::read_to_string(path)?;
+        let tokens_toml: TokensToml = toml::from_str(&reader)?;
+        for token in tokens_toml.token {
             tokens.insert(token.address, token);
         }
-    } else {
-        return Err(anyhow!("File path does not exist"));
     }
 
     Ok(tokens)
+}
+
+pub fn write_tokens_to_toml(
+    tokens: &BTreeMap<Address, Token>,
+    path: &Path,
+) -> Result<()> {
+    let tokens_vec: Vec<Token> = tokens.values().cloned().collect();
+    let tokens_toml = TokensToml { token: tokens_vec };
+
+    let toml_string = toml::to_string_pretty(&tokens_toml)?;
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+
+    file.write_all(toml_string.as_bytes())?;
+
+    Ok(())
 }
