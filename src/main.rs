@@ -9,7 +9,7 @@ use dotenv::dotenv;
 use std::path::Path;
 use anyhow::{anyhow, Result};
 
-use block_extractor_rs::{
+use erc20_extractor_rs::{
     tokens::*,
     pools::*,
 };
